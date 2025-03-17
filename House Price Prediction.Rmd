@@ -1,0 +1,314 @@
+---
+title: "House Price Prediction"
+date: "2024-04-09"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# About the Data
+The data was collected from the website 'Kaggle', which contains thousands of datasets used for training predictive algorithms. The specific dataset we are using contains training and testing data fortunately named "train" and "test", of various features of homes collected in Ames, Iowa. The goal of this dataset is for users to find a way to predict the price of a house given these features. Multiple models such as linear regression and neural networks can be used, as well as feature selection to improve the accuracy of the predictions. Given an understanding of the data, the user can create a very accurate model.
+
+Link to dataset on Kaggle: https://www.kaggle.com/competitions/house-prices-advanced-regression-techniques/data
+
+# Loading Packages
+```{r}
+library(tidyverse)
+library(corrplot)
+library(lubridate)
+library(ggplot2)
+library(readr)
+library(caTools)
+library(GGally)
+library(caret)
+library(leaps)
+library(gridExtra)
+```
+# Reading the data and understanding it
+```{r}
+train_data = read.csv("train.csv")
+test_dataa = read.csv("test.csv")
+```
+
+Converting all character columns to factor:
+```{r}
+train_data <- as.data.frame(unclass(train_data), stringsAsFactors = TRUE)
+test_dataa <- as.data.frame(unclass(test_dataa), stringsAsFactors = TRUE)
+```
+
+Now, lets view the first row of the training set:
+```{r}
+head(train_data,1)
+```
+From our first row of data, we can already see some columns such as "Alley" have missing values classified as NA. We also notice the column "ID" is essentially useless because it does not provide any descriptions to what the house may be like, it is essentially an identity column.
+
+```{r}
+str(train_data)
+```
+We can see that our data consists of only integer and Factor columns, meaning that they are either whole numbers or some text description of the house.
+
+```{r}
+summary(train_data)
+```
+From this command, we can see the summary from every column. More importantly, the summary statistics of the numerical columns. We can see that the average price of a home is 180,921. We can also see that an average home was built in 1971 with around 2.8 rooms above ground.
+
+# Data Cleaning
+As seen above, this dataset has rows with missing values, let's check how many missing values there actually are.
+```{r}
+NA_values = data.frame(NA_value=colSums(is.na(train_data)))
+NA_values
+```
+
+Let's drop any columns with missing values in both the training and test set, as well as the ID column as it is not useful.
+```{r}
+# Getting rid of training and testing columns with missing values
+train_data = subset(train_data, select = -c(Id,LotFrontage,Alley,MasVnrType,MasVnrArea,BsmtQual,BsmtCond,BsmtExposure,BsmtFinType1,BsmtFinType2,Electrical,FireplaceQu,GarageType,GarageYrBlt,GarageFinish,GarageQual,GarageCond,PoolQC,Fence,MiscFeature))
+
+test_data = subset(test_dataa, select = -c(Id,LotFrontage,Alley,MasVnrType,MasVnrArea,BsmtQual,BsmtCond,BsmtExposure,BsmtFinType1,BsmtFinType2,Electrical,FireplaceQu,GarageType,GarageYrBlt,GarageFinish,GarageQual,GarageCond,PoolQC,Fence,MiscFeature))
+```
+
+# Exploratory Data Analysis on Training Set
+## Pie Plot 
+```{r}
+barplot(table(train_data$OverallQual),main="Overall Quality")
+```
+```{r}
+pie(table(train_data$ExterQual), labels = names(table(train_data$ExterQual)),main="Exterior Quality")
+```
+```{r}
+pie(table(train_data$KitchenQual), labels = names(table(train_data$KitchenQual)),main="Kitchen Quality")
+```
+```{r}
+pie(table(train_data$HeatingQC), labels = names(table(train_data$HeatingQC)),main="Heating Quality")
+```
+
+As we can see, most houses have quality of 5-6 which are average. This coincides with our kitchen and heating quality as most are "TA" or average. Surprisingly, most houses have excellent exterior quality. This may be due to how much the kitchen and heating get used over time so it wears down.
+
+## Correlation Matrix Plot
+```{r}
+numerical_data <- train_data %>% dplyr::select(where(is.numeric))
+cor_data=data.frame(numerical_data)
+correlation = cor(cor_data)
+par(mfrow=c(1,1))
+corrplot(correlation,method="color", tl.cex = 0.7)
+```
+
+In our correlation plot of only our numerical columns, we can see some interesting findings. Importantly, the SalePrice column has some very strong positive correlations with the overall quality of the house (OverallQual) and the above ground living area (GrLivArea), with also some strong correlations with most columns. There are columns with not much correlation with SalePrice as we can see, the building class (MSSubClass) has almost no correlation since the color is white. Most columns after the Enclosed Porch column have no correlation to SalePrice. There are not many negative correlations to SalePrice aswell.
+
+## Strongly Correlated Columns Boxplot 
+
+```{r}
+boxplot(SalePrice~OverallQual, data=train_data, col="lightblue", border="cadetblue4", 
+        main="SalePrice and Overall Quality", 
+        xlab="Overall Quality", ylab="Price")
+```
+```{r}
+boxplot(SalePrice~TotRmsAbvGrd, data=train_data, col="lightblue", border="cadetblue4", 
+        main="SalePrice and #Above Ground Rooms", 
+        xlab="Total Rooms Above Ground", ylab="Price")
+```
+```{r}
+boxplot(SalePrice~FullBath, data=train_data, col="lightblue", border="cadetblue4", 
+        main="SalePrice and #Full Bathrooms", 
+        xlab="Full Bathrooms", ylab="Price")
+```
+
+
+We can see the general trend in these boxplots. When the overall quality increases on average, so does the price of a house as expected. The total above ground rooms, there seems to be a positive correlation but the price goes down when there are 12-14 rooms for some reason. This could be due to different factors of each house individually which cause a decrease in the overall median price. When there is 1 full bathroom, it seems to have the same median price as a house with 0 full baths, which is quite unexpected.
+
+```{r}
+print(sum(train_data$FullBath == 0))
+print(sum(train_data$FullBath == 1))
+```
+
+As shown above, the it is hard to compare 0 Full bathroom houses with 1 Full Bathroom houses since there are not many houses with 0 full bathrooms in the dataset, hence why they have similar median prices.
+
+## Histogram of SalePrice to see Price distribution
+
+```{r}
+options(scipen = 999)
+hist(train_data$SalePrice, col="lightblue")
+```
+
+As we can see, most of the houses in this dataset are $100,000 - $200,000.
+
+## SalePrice Boxplot to see outliers
+```{r}
+boxplot(train_data$SalePrice, col="lightblue", border = "cadetblue4")
+```
+
+As we can see, the outliers are above around $350,000, while most houses range between around $150,000 to $220,000. We notice that the number of outliers may not be significant enough in comparison to the entire dataset to remove.
+
+
+# Data Altering
+
+There are a lot of columns that are not correlated to the price of a house. Since we are using a linear classifier, we should see the effects of a raw dataset with all of our columns, and another dataset with reduced columns that have no correlation ones removed. We should also check if the number of outliers are significant to our entire dataset.
+
+```{r}
+message("Total Number of Training Data: ", nrow(train_data))
+message("Number of outliers: ", sum(train_data$SalePrice > 350000))
+```
+As we can see, there are clearly not enough significant outliers that can heavily alter our dataset, so it is not worth removing them.
+
+Now, Let's create two linear models, one which has every column in the dataset, while the other excludes columns that have low correlation with SalePrice
+
+```{r}
+numerical_data <- train_data %>% dplyr::select(where(is.numeric))
+cor_data=data.frame(numerical_data)
+print(cor(cor_data$SalePrice, cor_data))
+```
+We should try a model with columns of correlation above absolute value of 0.3. This way, we do not lose too many features while also retaining the most important factors of house price.
+
+## Validation Set
+Let's also create a validation set since the test set does not have labels in which we can check our metrics
+
+```{r}
+set.seed(42)
+sample = sample.split(cor_data, SplitRatio = 0.9)
+train.data = subset(cor_data, sample==TRUE)
+val.data = subset(cor_data, sample==FALSE)
+
+numerical_t <- test_data %>% dplyr::select(where(is.numeric))
+cor_dat=data.frame(numerical_t)
+
+cor_dat[is.na(cor_dat)] <- 0
+test.data <- model.matrix(~.,cor_dat)[,-1]
+```
+
+# Data Modelling
+## Linear Regression 1
+Firstly, Lets create a general Linear model. One with every column and another with only columns with high correlation.
+
+```{r}
+model_orig = lm(SalePrice ~ MSSubClass+LotArea+OverallQual+OverallCond +YearBuilt+BsmtFinSF1+YearRemodAdd+BsmtFinSF2+BsmtUnfSF+TotalBsmtSF+X1stFlrSF +X2ndFlrSF+LowQualFinSF +GrLivArea + BsmtFullBath+BsmtHalfBath+FullBath+HalfBath+BedroomAbvGr+KitchenAbvGr +TotRmsAbvGrd +Fireplaces +GarageCars +GarageArea+WoodDeckSF +OpenPorchSF +EnclosedPorch + X3SsnPorch +ScreenPorch+PoolArea+MiscVal + MoSold+ YrSold,data = train.data)
+
+model_reduced = lm(SalePrice ~ OverallQual +YearBuilt+BsmtFinSF1+YearRemodAdd+TotalBsmtSF+X1stFlrSF +X2ndFlrSF +GrLivArea +FullBath+TotRmsAbvGrd +Fireplaces +GarageCars +GarageArea+WoodDeckSF +OpenPorchSF,data = train.data)
+```
+
+## Lasso Regression
+Let's create a Lasso regression model. We will compare all these models in the next part.
+```{r}
+library(glmnet)
+set.seed(42)
+x <- model.matrix(SalePrice~., train.data)[,-1]
+y <- train.data$SalePrice
+
+x_val <- model.matrix(SalePrice~., val.data)[,-1]
+y_val <- val.data$SalePrice
+
+cv <- cv.glmnet(x,y,alpha=1)
+
+# Fit the model on training data using lowest lambda
+modelLass <- glmnet(x,y,alpha=1, lambda=cv$lambda.min)
+coef(modelLass)
+```
+
+## Elastic Net Regression
+```{r}
+set.seed(42)
+modelNet <- train(SalePrice ~., data=train.data, method="glmnet", trControl=trainControl("cv",number=10), tuneLength = 10)
+
+modelNet
+```
+```{r}
+modelNet$bestTune
+```
+
+```{r}
+coef(modelNet$finalModel, modelNet$bestTune$lambda)
+```
+
+## Single Layer Neural Network
+```{r}
+library(keras)
+library(tensorflow)
+NNmodel <- keras_model_sequential () %>%
+  layer_dense(units=50,activation="relu",input_shape=ncol(x)) %>%
+  layer_dropout(rate=0.2) %>%
+  layer_dense(units=1)
+
+NNmodel %>% compile(loss="mse", optimizer = optimizer_adam(), metrics = list("mean_absolute_error"))
+
+#Fitting out NN model
+history <- NNmodel %>% fit(x, y, epochs=50, batch_size=4, validation_data=list(x_val,y_val))
+```
+
+```{r}
+plot(history)
+```
+
+# Model Comparisons
+So we have created 5 models: A regular linear regression with all our columns, another regular linear regression with strongly correlated columns, a Lasso regression model, An ElasticNet regression model, and a simple Neural Network model.
+
+One thing we notice in our neural network model is that the validation loss and validation absolute error is less than the training set equivalent. This could have been due to our dropout rate which reduced the overfitting in our training set.
+
+Let's compare R squared values in our regression models.
+
+## Regular regression R^2
+```{r}
+summary(model_orig)
+
+summary(model_reduced)
+```
+
+Surprisingly, our linear model that has every column has a better R^2 than the select columns with high correlation. This may be due to too many features lost which underfit the training data.
+
+## Lasso and ElasticNet R^2 and RMSE
+Firstly using lasso and ElasticNet, we make predictions on our validation set and compare the RMSE as well
+
+```{r}
+# LASSO
+predictionLasso <- modelLass %>% predict(x_val)
+
+# RMSE and R^2
+data.frame(
+RMSE = caret::RMSE(predictionLasso, y_val),
+Rsquare = caret::R2(predictionLasso, y_val))
+```
+```{r}
+# ELASTIC NET
+predictionNet <- modelNet %>% predict(x_val)
+
+# RMSE and R^2
+data.frame(
+RMSE = caret::RMSE(predictionNet, y_val),
+Rsquare = caret::R2(predictionNet, y_val))
+```
+As we can see, out of all of our regression models, ElasticNet has the largest R squared value meaning it better fits our training data. We also notice the RMSE of ElasticNet is lower than Lasso which concludes that it is more accurate.
+
+When viewing the coefficients of ElasticNet above, we see that the intercept $\hat{\beta}_0$ is -446044. This model also gives us predictors for multiple other columns but also does not include some such as BsmtUnfSF.
+
+Therefore out of our regression models, ElasticNet seems to be the best performing.
+
+# ElasticNet vs Neural Network
+We will now see the final predictions of our ElasticNet regression model, and compare to the neural network model we made. We will submit to kaggle and see our score on the testing data.
+
+```{r}
+elastic <- modelNet %>% predict(test.data)
+elastic <- cbind(Id = test_dataa$Id, elastic)
+colnames(elastic)[colnames(elastic) == 'elastic'] <- 'SalePrice'
+
+NN <- predict(NNmodel, test.data)
+NN <- cbind(Id = test_dataa$Id, NN)
+colnames(NN)[colnames(NN) == ''] <- 'SalePrice'
+```
+
+```{r}
+write.csv(elastic, "elastic.csv", row.names = FALSE)
+
+write.csv(NN, "nn.csv", row.names = FALSE)
+```
+
+# Results
+After Submitting, it turns out our Neural Network model is the best performing model, beating out all the linear regression variants. The score for the NN model on Kaggle was 0.22206 while the ElasticNet score was 0.34880. Both are very solid scores but the NN model is the best. This may be due to the number of epochs that I have ran for the NN model, 50 is a lot.
+
+The interpretation of the 0.22206 score shows the model has (1-0.22206) or 77.79% accuracy. This means that our single layer neural netork can accurately predict the price of a home around 78% of the time.
+
+Therefore, overall the best regression model was our ElasticNet model, but it has been beaten by a single layer neural network.
+
+For future model improvements, some heavy feature selection can be made while also testing different parameters like the alpha values in regression.
